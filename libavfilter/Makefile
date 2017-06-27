@@ -174,6 +174,7 @@ OBJS-$(CONFIG_DRAWBOX_FILTER)                += vf_drawbox.o
 OBJS-$(CONFIG_DRAWGRAPH_FILTER)              += f_drawgraph.o
 OBJS-$(CONFIG_DRAWGRID_FILTER)               += vf_drawbox.o
 OBJS-$(CONFIG_DRAWTEXT_FILTER)               += vf_drawtext.o
+OBJS-$(CONFIG_DYNOVERLAY_FILTER) 			 += vf_dynoverlay.o
 OBJS-$(CONFIG_EDGEDETECT_FILTER)             += vf_edgedetect.o
 OBJS-$(CONFIG_ELBG_FILTER)                   += vf_elbg.o
 OBJS-$(CONFIG_EQ_FILTER)                     += vf_eq.o

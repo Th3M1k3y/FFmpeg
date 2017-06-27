@@ -186,6 +186,7 @@ static void register_all(void)
     REGISTER_FILTER(DRAWGRAPH,      drawgraph,      vf);
     REGISTER_FILTER(DRAWGRID,       drawgrid,       vf);
     REGISTER_FILTER(DRAWTEXT,       drawtext,       vf);
+    REGISTER_FILTER(DYNOVERLAY, dynoverlay, vf);
     REGISTER_FILTER(EDGEDETECT,     edgedetect,     vf);
     REGISTER_FILTER(ELBG,           elbg,           vf);
     REGISTER_FILTER(EQ,             eq,             vf);
