@@ -59,6 +59,10 @@ typedef struct DynOverlayContext {
 	int check_interval;
 	uint64_t ts_last_check;
 
+	int x_offset;
+	int y_offset;
+
+
 	time_t ts_last_update;
 	AVFrame *overlay_frame;
 
@@ -73,6 +77,8 @@ typedef struct DynOverlayContext {
 static const AVOption dynoverlay_options[]= {
 {"overlayfile", "set overlay file", OFFSET(overlayfile), AV_OPT_TYPE_STRING, {.str=NULL}, CHAR_MIN, CHAR_MAX, FLAGS},
 {"check_interval", "interval (in ms) between checks for updated overlay file", OFFSET(check_interval), AV_OPT_TYPE_INT, {.i64=250}, INT_MIN, INT_MAX , FLAGS},
+{"x", "xoffset of overlay position, comma deliniated", OFFSET(x_offset), AV_OPT_TYPE_INT, {.i64=0}, INT_MIN, INT_MAX , FLAGS},
+{"y", "yoffset of overlay position, comma deliniated", OFFSET(y_offset), AV_OPT_TYPE_INT, {.i64=0}, INT_MIN, INT_MAX , FLAGS},
 { NULL }
 };
 
@@ -113,14 +119,11 @@ static int load_overlay (AVFilterContext *fctx)
 		av_frame_free (&ctx->overlay_frame);
 	}
 	
-	av_log (fctx, AV_LOG_ERROR, "Loading new overlay image.\n");
-
-
 	rgba_frame = av_frame_alloc();
 	if ((ret = ff_load_image(rgba_frame->data, rgba_frame->linesize,&rgba_frame->width, &rgba_frame->height,&rgba_frame->format, ctx->overlayfile, ctx)) < 0)
 	{
 		av_frame_free (&rgba_frame);
-		av_log (fctx, AV_LOG_ERROR, "Image Load Failed.\n");
+		av_log (fctx, AV_LOG_ERROR, "Load Image '%s' Failed.\n",ctx->overlayfile);
 		return ret;
 	}
 
@@ -147,15 +150,14 @@ static int load_overlay (AVFilterContext *fctx)
 	if ((ret = ff_scale_image(ctx->overlay_frame->data, ctx->overlay_frame->linesize,rgba_frame->width, rgba_frame->height, ctx->overlay_frame->format,rgba_frame->data, rgba_frame->linesize,rgba_frame->width, rgba_frame->height, rgba_frame->format, ctx)) < 0)
 	{
 		av_frame_free (&ctx->overlay_frame);
-		av_frame_free (&rgba_frame);
-		return ret;
+	 	av_frame_free (&rgba_frame);
+	 	return ret;
 	}
 
 	av_frame_free (&rgba_frame);
 
 	return 0;
 }
-
 
 static int clear_overlay (AVFilterContext *fctx)
 {
@@ -227,8 +229,6 @@ static int check_overlay (AVFilterContext *fctx)
 		load_overlay (fctx);
 	}
 
-
-
 	return 0;
 }
 
@@ -242,70 +242,72 @@ static int check_overlay (AVFilterContext *fctx)
 // ((((x) + (y)) << 8) - ((x) + (y)) - (y) * (x)) is a faster version of: 255 * (x + y)
 #define UNPREMULTIPLY_ALPHA(x, y) ((((x) << 16) - ((x) << 9) + (x)) / ((((x) + (y)) << 8) - ((x) + (y)) - (y) * (x)))
 
-static void blend_image(AVFilterContext *fctx,AVFrame *dst, const AVFrame *src)
+static void blend_image( AVFilterContext *fctx,AVFrame *dst, const AVFrame *src )
 {
 	DynOverlayContext *ctx = fctx->priv;
+	
+    const int x = ctx->x_offset;
+    const int y = ctx->y_offset;
+    int i;
+	int hsub, vsub;
+	int src_wp, src_hp, dst_wp, dst_hp;
+	int yp, xp;
+	uint8_t *s, *sp, *d, *dp, *a, *ap;
+	int jmax, j, k, kmax;
 
-	int i, j, jmax, k, kmax;
-	const int src_w = src->width;
-	const int src_h = src->height;
-	const int dst_w = dst->width;
-	const int dst_h = dst->height;
+	for( i = 0; i < 3; ++i )
+    {
+		hsub = i ? ctx->hsub : 0;
+		vsub = i ? ctx->vsub : 0;
 
- 	for (i = 0; i < 3; i++)
-	{
-		int hsub = i ? ctx->hsub : 0;
-		int vsub = i ? ctx->vsub : 0;
-		int src_wp = AV_CEIL_RSHIFT(src_w, hsub);
-		int src_hp = AV_CEIL_RSHIFT(src_h, vsub);
-		int dst_wp = AV_CEIL_RSHIFT(dst_w, hsub);
-		int dst_hp = AV_CEIL_RSHIFT(dst_h, vsub);
-		uint8_t *s, *sp, *d, *dp, *a, *ap;
+	    src_wp = AV_CEIL_RSHIFT( src->width, hsub );
+	    src_hp = AV_CEIL_RSHIFT( src->height, vsub );
+	    dst_wp = AV_CEIL_RSHIFT( dst->width, hsub );
+	    dst_hp = AV_CEIL_RSHIFT( dst->height, vsub );
+	    yp = y >> vsub;
+	    xp = x >> hsub;
+	    
+	    j = FFMAX( -yp, 0 );
+	    sp = src->data[ i ] + j             * src->linesize[ i ];
+	    dp = dst->data[ i ] + ( yp + j )    * dst->linesize[ i ];
+	    ap = src->data[ 3 ] + ( j << vsub ) * src->linesize[ 3 ];
 
-		j = 0;
-		sp = src->data[i] + j * src->linesize[i];
-		dp = dst->data[i] + j * dst->linesize[i];
-		ap = src->data[3] + (j<<vsub) * src->linesize[3];
+	    for (jmax = FFMIN( -yp + dst_hp, src_hp ); j < jmax; j++ ) 
+	    {
+	        k = FFMAX( -xp, 0 );
+	        d = dp + ( xp + k );
+	        s = sp + k;
+	        a = ap + ( k << hsub );
 
-		for (jmax = FFMIN(dst_hp, src_hp); j < jmax; j++)
-		{
-			k = 0;
-			d = dp + k;
-			s = sp + k;
-			a = ap + (k<<hsub);
+	        for ( kmax = FFMIN( -xp + dst_wp, src_wp ); k < kmax; k++ ) 
+	        {
+	            int alpha_v, alpha_h, alpha;
 
-			for (kmax = FFMIN(dst_wp, src_wp); k < kmax; k++) 
-			{
-				int alpha_v, alpha_h, alpha;
+	            // average alpha for color components, improve quality
+	            if ( hsub && vsub && j + 1 < src_hp && k + 1 < src_wp ) 
+	            {
+	                alpha = ( a[ 0 ] + a[ src->linesize[ 3 ] ] + a[ 1 ] + a[ src->linesize[ 3 ] + 1 ] ) >> 2;
+	            }
+	            else if ( hsub || vsub ) 
+	            {
+	                alpha_h = hsub && k + 1 < src_wp ? ( a[ 0 ] + a[ 1 ] ) >> 1 : a[ 0 ];
+	                alpha_v = vsub && j + 1 < src_hp ? ( a[ 0 ] + a[ src->linesize[ 3 ] ] ) >> 1 : a[ 0 ];
+	                alpha = ( alpha_v + alpha_h ) >> 1;
+	            } 
+	            else
+	            {
+	                alpha = a[ 0 ];
+	            }
 
-				// average alpha for color components, improve quality
-				if (hsub && vsub && j+1 < src_hp && k+1 < src_wp)
-				{
-					alpha = (a[0] + a[src->linesize[3]] +
-					a[1] + a[src->linesize[3]+1]) >> 2;
-				}
-				else if (hsub || vsub)
-				{
-					alpha_h = hsub && k+1 < src_wp ?
-					(a[0] + a[1]) >> 1 : a[0];
-					alpha_v = vsub && j+1 < src_hp ?
-					(a[0] + a[src->linesize[3]]) >> 1 : a[0];
-					alpha = (alpha_v + alpha_h) >> 1;
-				}
-				else
-				{
-					alpha = a[0];
-				}
-
-				*d = FAST_DIV255(*d * (255 - alpha) + *s * alpha);
-				s++;
-				d++;
-				a += 1 << hsub;
-			}
-			dp += dst->linesize[i];
-			sp += src->linesize[i];
-			ap += (1 << vsub) * src->linesize[3];
-		}
+	            *d = FAST_DIV255( *d * ( 255 - alpha ) + *s * alpha );
+	            s++;
+	            d++;
+	            a += 1 << hsub;
+	        }
+	        dp += dst->linesize[ i ];
+	        sp += src->linesize[ i ];
+	        ap += ( 1 << vsub ) * src->linesize[ 3 ];
+	    }
 	}
 }
 
@@ -396,18 +398,16 @@ static const AVFilterPad avfilter_vf_dynoverlay_outputs[] =
 	{ NULL }
 };
 
-
 static av_cold int init(AVFilterContext *fctx)
 {
 	DynOverlayContext *ctx = fctx->priv;
-	av_log(fctx, AV_LOG_ERROR, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! LOADING OVERLAY PLUGIN......\n");
 	
 	if (!ctx->overlayfile) 
 	{
 		av_log(fctx, AV_LOG_ERROR, "No overlay filename provided\n");
 		return AVERROR(EINVAL);
 	}
-
+	av_log (fctx, AV_LOG_INFO, "Setting up overlay Image '%s'.\n",ctx->overlayfile);
 	ctx->ts_last_check = 0;
 	ctx->ts_last_update = 0;
 
@@ -443,7 +443,3 @@ AVFilter ff_vf_dynoverlay = {
 	.inputs = avfilter_vf_dynoverlay_inputs,
 	.outputs = avfilter_vf_dynoverlay_outputs,
 };
-
-
-
-
